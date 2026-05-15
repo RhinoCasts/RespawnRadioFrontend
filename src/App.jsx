@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import './index.css'
 
 const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const SHORT_DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
