@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import './index.css'
 
+const API = import.meta.env.VITE_API_URL || "https://respawnradio.onrender.com";
+
 const DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const SHORT_DAYS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 const HOURS = Array.from({length:24},(_,i)=>i);
@@ -26,45 +28,6 @@ function getNext7Days(){
   }
   return days;
 }
-
-const INITIAL_USERS=[
-  {id:"admin",username:"admin",password:"admin123",role:"admin",displayName:"Admin"},
-  {id:"host1",username:"djnova",password:"pass123",role:"host",displayName:"DJ Nova"},
-  {id:"host2",username:"pixelwave",password:"pass123",role:"host",displayName:"Pixel Wave"},
-];
-
-const INITIAL_SHOWS=(()=>{
-  const shows=[];
-  const now=new Date();
-  const base=new Date(now);
-  base.setMinutes(0,0,0);
-
-  // pre-seed some shows
-  const seed=[
-    {hostId:"host1",displayName:"DJ Nova",title:"Morning Boost",dayOffset:0,hour:8,duration:2},
-    {hostId:"host2",displayName:"Pixel Wave",title:"Chillwave Sessions",dayOffset:1,hour:14,duration:1},
-    {hostId:"host1",displayName:"DJ Nova",title:"Evening Drive",dayOffset:2,hour:18,duration:2},
-    {hostId:"host2",displayName:"Pixel Wave",title:"Late Night Vibes",dayOffset:3,hour:22,duration:1},
-  ];
-
-  seed.forEach((s,i)=>{
-    const start=new Date(base);
-    start.setDate(base.getDate()+s.dayOffset);
-    start.setHours(s.hour,0,0,0);
-    const end=new Date(start);
-    end.setHours(start.getHours()+s.duration);
-    shows.push({
-      id:`seed-${i}`,
-      hostId:s.hostId,
-      hostDisplayName:s.displayName,
-      title:s.title,
-      start:start.toISOString(),
-      end:end.toISOString(),
-      recurringGroupId:null,
-    });
-  });
-  return shows;
-})();
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function overlaps(showsArr, startISO, endISO, excludeId=null){
@@ -623,10 +586,10 @@ function AdminPanel({users, shows, invites, autoDJImage, onSetAutoDJImage, onAdd
   const[generatedLink,setGeneratedLink]=useState("");
   const[linkCopied,setLinkCopied]=useState(false);
 
-  function handleAdd(){
+  async function handleAdd(){
     if(!newName||!newUser||!newPass){setErr("All fields required.");setOk("");return;}
-    if(users.find(u=>u.username===newUser)){setErr("Username already taken.");setOk("");return;}
-    onAddUser({id:`user-${Date.now()}`,username:newUser,password:newPass,role:newRole,displayName:newName});
+    const result=await onAddUser({username:newUser,password:newPass,displayName:newName,role:newRole});
+    if(result&&result.error){setErr(result.error);setOk("");return;}
     setNewName("");setNewUser("");setNewPass("");setErr("");setOk(`User "${newUser}" created!`);
   }
 
@@ -804,26 +767,52 @@ function APIPanel({shows}){
 }
 
 // ── REGISTER PAGE (invite flow) ───────────────────────────────────────────────
-function RegisterPage({token, invites, users, onRegister, onInvalidToken}){
-  const THIRTY_DAYS=30*24*60*60*1000;
-  const invite=invites.find(i=>i.token===token&&!i.used&&(Date.now()-i.createdAt)<THIRTY_DAYS);
+function RegisterPage({token, onInvalidToken}){
+  const[valid,setValid]=useState(null); // null=loading, true, false
   const[displayName,setDisplayName]=useState("");
   const[username,setUsername]=useState("");
   const[password,setPassword]=useState("");
   const[confirm,setConfirm]=useState("");
   const[err,setErr]=useState("");
   const[done,setDone]=useState(false);
+  const[loading,setLoading]=useState(false);
 
-  function handleSubmit(){
+  useEffect(()=>{
+    fetch(`${API}/api/invites/validate/${token}`)
+      .then(r=>r.json())
+      .then(d=>setValid(d.valid))
+      .catch(()=>setValid(false));
+  },[token]);
+
+  async function handleSubmit(){
     if(!displayName.trim()||!username.trim()||!password||!confirm){setErr("All fields are required.");return;}
     if(password.length<6){setErr("Password must be at least 6 characters.");return;}
     if(password!==confirm){setErr("Passwords do not match.");return;}
-    if(users.find(u=>u.username===username.trim())){setErr("That username is already taken.");return;}
-    onRegister(token,{id:`user-${Date.now()}`,username:username.trim(),password,role:"host",displayName:displayName.trim()});
-    setDone(true);
+    setLoading(true);setErr("");
+    try{
+      const r=await fetch(`${API}/api/invites/register`,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({token,username:username.trim(),password,displayName:displayName.trim()}),
+      });
+      const d=await r.json();
+      if(!r.ok){setErr(d.error||"Registration failed.");setLoading(false);return;}
+      setDone(true);
+    }catch{
+      setErr("Network error — please try again.");
+    }
+    setLoading(false);
   }
 
-  if(!invite){
+  if(valid===null){
+    return(
+      <div style={{fontFamily:"'Rajdhani',system-ui,sans-serif",background:"#040d18",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#e8f0fe"}}>
+        <div style={{textAlign:"center"}}><div style={{fontSize:14,color:"#7a8fa8"}}>Validating invite...</div></div>
+      </div>
+    );
+  }
+
+  if(!valid){
     return(
       <div style={{fontFamily:"'Rajdhani',system-ui,sans-serif",background:"#040d18",minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",color:"#e8f0fe"}}>
         <div style={{textAlign:"center",maxWidth:400,padding:32}}>
@@ -859,7 +848,7 @@ function RegisterPage({token, invites, users, onRegister, onInvalidToken}){
             <Input label="Password" type="password" value={password} onChange={setPassword} placeholder="Min. 6 characters"/>
             <Input label="Confirm Password" type="password" value={confirm} onChange={setConfirm} placeholder="Repeat password"/>
             {err&&<div style={{color:"#ff6666",fontSize:13,marginBottom:14,background:"#2a0d0d",borderRadius:6,padding:"8px 12px"}}>{err}</div>}
-            <Btn onClick={handleSubmit} style={{width:"100%",textAlign:"center"}}>Create Account</Btn>
+            <Btn onClick={handleSubmit} disabled={loading} style={{width:"100%",textAlign:"center"}}>{loading?"Creating...":"Create Account"}</Btn>
           </div>
         )}
       </div>
@@ -869,13 +858,16 @@ function RegisterPage({token, invites, users, onRegister, onInvalidToken}){
 
 // ── MAIN APP ──────────────────────────────────────────────────────────────────
 export default function App(){
-  const[users,setUsers]=useState(INITIAL_USERS);
-  const[shows,setShows]=useState(INITIAL_SHOWS);
-  const[currentUser,setCurrentUser]=useState(null);
+  const[shows,setShows]=useState([]);
+  const[users,setUsers]=useState([]);
   const[invites,setInvites]=useState([]);
-  const[autoDJImage,setAutoDJImage]=useState(null);
+  const[currentUser,setCurrentUser]=useState(()=>{
+    try{const u=localStorage.getItem("rr_user");return u?JSON.parse(u):null;}catch{return null;}
+  });
+  const[token,setToken]=useState(()=>localStorage.getItem("rr_token")||null);
+  const[autoDJImage,setAutoDJImage]=useState(()=>localStorage.getItem("rr_autodj")||null);
+  const[showsLoading,setShowsLoading]=useState(true);
 
-  // Check for ?invite=TOKEN in URL
   const[inviteToken]=useState(()=>{
     try{const p=new URLSearchParams(window.location.search);return p.get("invite")||null;}catch{return null;}
   });
@@ -885,190 +877,167 @@ export default function App(){
   const[bookSlot,setBookSlot]=useState(null);
   const[deleteShow,setDeleteShow]=useState(null);
   const[showChangePw,setShowChangePw]=useState(false);
-  const[showAdmin,setShowAdmin]=useState(false);
 
   const days=getNext7Days();
 
-  function handleLogin(username,password){
-    const u=users.find(u=>u.username===username&&u.password===password);
-    if(u){setCurrentUser(u);setShowLogin(false);return true;}
-    return false;
-  }
-
-  function handleLogout(){setCurrentUser(null);setTab("schedule");}
-
-  // ── Rolling top-up: keep recurring shows populated 4 weeks ahead ─────────────
+  // ── Persist autoDJ image to localStorage ─────────────────────────────────
   useEffect(()=>{
-    function topUp(){
-      setShows(prev=>{
-        const now=new Date();
-        const FOUR_WEEKS=28*24*60*60*1000;
-        const additions=[];
+    if(autoDJImage)localStorage.setItem("rr_autodj",autoDJImage);
+    else localStorage.removeItem("rr_autodj");
+  },[autoDJImage]);
 
-        // Find all unique recurring groups
-        const groups=[...new Set(prev.filter(s=>s.recurringGroupId).map(s=>s.recurringGroupId))];
+  // ── API helper ───────────────────────────────────────────────────────────
+  const apiFetch=useCallback(async(path,options={})=>{
+    const headers={"Content-Type":"application/json",...(options.headers||{})};
+    if(token)headers["Authorization"]=`Bearer ${token}`;
+    const r=await fetch(`${API}${path}`,{...options,headers});
+    return r;
+  },[token]);
 
-        groups.forEach(gid=>{
-          const groupShows=prev.filter(s=>s.recurringGroupId===gid);
-          const template=groupShows[0]; // all shows in a group share the same metadata
-          if(!template||!template.recurMeta)return;
-
-          const {recurType,recurDays,hour,durationHours}=template.recurMeta;
-          const futureShows=groupShows.filter(s=>new Date(s.start)>now);
-
-          if(recurType==="weekly"){
-            // Find the latest future show in this group
-            const latest=futureShows.reduce((a,b)=>new Date(a.start)>new Date(b.start)?a:b, futureShows[0]||groupShows[groupShows.length-1]);
-            if(!latest)return;
-            const latestStart=new Date(latest.start);
-            // If the latest is less than 4 weeks from now, add one more week out
-            while(latestStart.getTime()-now.getTime()<FOUR_WEEKS){
-              const ns=new Date(latestStart);
-              ns.setDate(ns.getDate()+7);
-              const ne=new Date(ns);
-              ne.setHours(ns.getHours()+durationHours);
-              const alreadyExists=prev.some(s=>s.recurringGroupId===gid&&dateKey(new Date(s.start))===dateKey(ns));
-              const alreadyAdded=additions.some(s=>s.recurringGroupId===gid&&dateKey(new Date(s.start))===dateKey(ns));
-              if(!alreadyExists&&!alreadyAdded&&!overlaps([...prev,...additions],ns.toISOString(),ne.toISOString())){
-                additions.push({...latest,id:`show-topup-${Date.now()}-${Math.random()}`,start:ns.toISOString(),end:ne.toISOString()});
-              }
-              latestStart.setDate(latestStart.getDate()+7);
-            }
-          } else {
-            // daily — per recurDay, find the latest future show for that day and top up
-            recurDays.forEach(dow=>{
-              const dayShows=futureShows.filter(s=>new Date(s.start).getDay()===dow);
-              const allDayShows=groupShows.filter(s=>new Date(s.start).getDay()===dow);
-              const latest=dayShows.length>0
-                ?dayShows.reduce((a,b)=>new Date(a.start)>new Date(b.start)?a:b)
-                :allDayShows.reduce((a,b)=>new Date(a.start)>new Date(b.start)?a:b, allDayShows[allDayShows.length-1]);
-              if(!latest)return;
-              const latestStart=new Date(latest.start);
-              while(latestStart.getTime()-now.getTime()<FOUR_WEEKS){
-                const ns=new Date(latestStart);
-                ns.setDate(ns.getDate()+7);
-                const ne=new Date(ns);
-                ne.setHours(ns.getHours()+durationHours);
-                const alreadyExists=prev.some(s=>s.recurringGroupId===gid&&dateKey(new Date(s.start))===dateKey(ns));
-                const alreadyAdded=additions.some(s=>s.recurringGroupId===gid&&dateKey(new Date(s.start))===dateKey(ns));
-                if(!alreadyExists&&!alreadyAdded&&!overlaps([...prev,...additions],ns.toISOString(),ne.toISOString())){
-                  additions.push({...latest,id:`show-topup-${Date.now()}-${Math.random()}`,start:ns.toISOString(),end:ne.toISOString()});
-                }
-                latestStart.setDate(latestStart.getDate()+7);
-              }
-            });
-          }
-        });
-
-        return additions.length>0?[...prev,...additions]:prev;
-      });
-    }
-
-    topUp(); // run immediately on mount
-    const t=setInterval(topUp,60000); // then every minute
-    return()=>clearInterval(t);
+  // ── Load shows (public, runs on mount and every 60s) ─────────────────────
+  const loadShows=useCallback(async()=>{
+    try{
+      const r=await fetch(`${API}/api/shows`);
+      const d=await r.json();
+      if(Array.isArray(d))setShows(d);
+    }catch(e){console.error("Failed to load shows",e);}
+    finally{setShowsLoading(false);}
   },[]);
 
-  function handleBook({title,startISO,endISO,durationHours,recurring,recurType,recurDays,image}){
-    const newShows=[];
-    const groupId=recurring?`grp-${Date.now()}`:null;
-    const recurMeta=recurring?{recurType,recurDays,hour:new Date(startISO).getHours(),durationHours}:null;
+  useEffect(()=>{
+    loadShows();
+    const t=setInterval(loadShows,60000);
+    return()=>clearInterval(t);
+  },[loadShows]);
 
-    if(!recurring){
-      // Single show
-      newShows.push({
-        id:`show-${Date.now()}`,
-        hostId:currentUser.id,
-        hostDisplayName:currentUser.displayName,
-        title,image:image||null,
-        start:startISO,end:endISO,
-        recurringGroupId:null,recurMeta:null,
+  // ── Load users and invites when admin logs in ─────────────────────────────
+  const loadAdminData=useCallback(async()=>{
+    if(!token||currentUser?.role!=="admin")return;
+    try{
+      const[ur,ir]=await Promise.all([
+        apiFetch("/api/users"),
+        apiFetch("/api/invites"),
+      ]);
+      const[ud,id]=await Promise.all([ur.json(),ir.json()]);
+      if(Array.isArray(ud))setUsers(ud);
+      if(Array.isArray(id))setInvites(id);
+    }catch(e){console.error("Failed to load admin data",e);}
+  },[token,currentUser,apiFetch]);
+
+  useEffect(()=>{loadAdminData();},[loadAdminData]);
+
+  // ── Login ────────────────────────────────────────────────────────────────
+  async function handleLogin(username,password){
+    try{
+      const r=await fetch(`${API}/api/auth/login`,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({username,password}),
       });
-    } else if(recurType==="weekly"){
-      // 4 weeks of weekly shows
-      for(let i=0;i<4;i++){
-        const s=new Date(startISO);s.setDate(s.getDate()+i*7);
-        const e=new Date(endISO);e.setDate(e.getDate()+i*7);
-        if(overlaps([...shows,...newShows],s.toISOString(),e.toISOString()))continue;
-        newShows.push({
-          id:`show-${Date.now()}-${i}`,
-          hostId:currentUser.id,hostDisplayName:currentUser.displayName,
-          title,image:image||null,
-          start:s.toISOString(),end:e.toISOString(),
-          recurringGroupId:groupId,recurMeta,
-        });
-      }
-    } else {
-      // daily — for each selected day, generate 4 weeks of shows
-      const baseStart=new Date(startISO);
-      const baseDow=baseStart.getDay();
-      recurDays.forEach(dow=>{
-        // Find date of first occurrence of this dow on or after baseStart
-        let first=new Date(baseStart);
-        const diff=(dow-baseDow+7)%7;
-        first.setDate(first.getDate()+diff);
-        for(let w=0;w<4;w++){
-          const s=new Date(first);s.setDate(first.getDate()+w*7);
-          const e=new Date(s);e.setHours(s.getHours()+durationHours);
-          if(overlaps([...shows,...newShows],s.toISOString(),e.toISOString()))continue;
-          newShows.push({
-            id:`show-${Date.now()}-${dow}-${w}`,
-            hostId:currentUser.id,hostDisplayName:currentUser.displayName,
-            title,image:image||null,
-            start:s.toISOString(),end:e.toISOString(),
-            recurringGroupId:groupId,recurMeta,
-          });
-        }
+      const d=await r.json();
+      if(!r.ok)return false;
+      localStorage.setItem("rr_token",d.token);
+      localStorage.setItem("rr_user",JSON.stringify(d.user));
+      setToken(d.token);
+      setCurrentUser(d.user);
+      setShowLogin(false);
+      return true;
+    }catch{return false;}
+  }
+
+  function handleLogout(){
+    localStorage.removeItem("rr_token");
+    localStorage.removeItem("rr_user");
+    setToken(null);
+    setCurrentUser(null);
+    setUsers([]);
+    setInvites([]);
+    setTab("schedule");
+  }
+
+  // ── Book show ────────────────────────────────────────────────────────────
+  async function handleBook({title,startISO,endISO,durationHours,recurring,recurType,recurDays,image}){
+    try{
+      const r=await apiFetch("/api/shows",{
+        method:"POST",
+        body:JSON.stringify({title,startISO,endISO,durationHours,recurring,recurType,recurDays,image}),
       });
-    }
-
-    setShows(prev=>[...prev,...newShows]);
-    setBookSlot(null);
+      const d=await r.json();
+      if(!r.ok){alert(d.error||"Failed to book show.");return;}
+      await loadShows();
+      setBookSlot(null);
+    }catch{alert("Network error — please try again.");}
   }
 
-  function handleDeleteShow(show, mode){
-    if(mode==="all"&&show.recurringGroupId){
-      const cutoff=new Date(show.start);
-      setShows(prev=>prev.filter(s=>!(s.recurringGroupId===show.recurringGroupId&&new Date(s.start)>=cutoff)));
-    } else {
-      setShows(prev=>prev.filter(s=>s.id!==show.id));
-    }
-    setDeleteShow(null);
+  // ── Delete show ──────────────────────────────────────────────────────────
+  async function handleDeleteShow(show,mode){
+    try{
+      const r=await apiFetch(`/api/shows/${show.id}`,{
+        method:"DELETE",
+        body:JSON.stringify({mode}),
+      });
+      if(!r.ok){const d=await r.json();alert(d.error||"Failed to delete.");return;}
+      await loadShows();
+      setDeleteShow(null);
+    }catch{alert("Network error — please try again.");}
   }
 
-  function handleChangePassword(curr,next,cb){
-    if(currentUser.password!==curr){cb(false,"Current password is incorrect.");return;}
-    setUsers(prev=>prev.map(u=>u.id===currentUser.id?{...u,password:next}:u));
-    setCurrentUser(prev=>({...prev,password:next}));
-    cb(true);
+  // ── Change password ──────────────────────────────────────────────────────
+  async function handleChangePassword(curr,next,cb){
+    try{
+      const r=await apiFetch("/api/auth/change-password",{
+        method:"POST",
+        body:JSON.stringify({currentPassword:curr,newPassword:next}),
+      });
+      const d=await r.json();
+      if(!r.ok){cb(false,d.error||"Failed to change password.");return;}
+      cb(true);
+    }catch{cb(false,"Network error — please try again.");}
   }
 
-  function handleAddUser(u){setUsers(prev=>[...prev,u]);}
-  function handleDeleteUser(id){
-    setUsers(prev=>prev.filter(u=>u.id!==id));
-    setShows(prev=>prev.filter(s=>s.hostId!==id));
+  // ── Admin: add user manually ─────────────────────────────────────────────
+  async function handleAddUser(u){
+    try{
+      const r=await apiFetch("/api/users",{
+        method:"POST",
+        body:JSON.stringify(u),
+      });
+      const d=await r.json();
+      if(!r.ok)return{error:d.error||"Failed to create user."};
+      await loadAdminData();
+      return{success:true};
+    }catch{return{error:"Network error — please try again."};}
   }
 
-  function handleGenerateInvite(){
-    const token=Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,10);
-    setInvites(prev=>[...prev,{token,used:false,createdAt:Date.now()}]);
-    return token;
+  // ── Admin: delete user ───────────────────────────────────────────────────
+  async function handleDeleteUser(id){
+    try{
+      await apiFetch(`/api/users/${id}`,{method:"DELETE"});
+      await loadAdminData();
+      await loadShows();
+    }catch{alert("Network error — please try again.");}
   }
 
-  function handleRegister(token,newUser){
-    setUsers(prev=>[...prev,newUser]);
-    setInvites(prev=>prev.map(i=>i.token===token?{...i,used:true}:i));
+  // ── Admin: generate invite ────────────────────────────────────────────────
+  async function handleGenerateInvite(){
+    try{
+      const r=await apiFetch("/api/invites",{method:"POST"});
+      const d=await r.json();
+      if(!r.ok)return null;
+      await loadAdminData();
+      return d.token;
+    }catch{return null;}
   }
 
-  // Show registration page if a valid invite token is in the URL
+  // ── Show invite registration page if token in URL ─────────────────────────
   if(inviteToken){
     return(
       <RegisterPage
         token={inviteToken}
-        invites={invites}
-        users={users}
-        onRegister={handleRegister}
-        onInvalidToken={()=>{ try{window.history.replaceState({},"",window.location.pathname);}catch{} window.location.reload(); }}
+        onInvalidToken={()=>{
+          try{window.history.replaceState({},"",window.location.pathname);}catch{}
+          window.location.reload();
+        }}
       />
     );
   }
@@ -1109,7 +1078,6 @@ export default function App(){
       <div style={{maxWidth:1100,margin:"0 auto",padding:"24px 16px"}}>
         <LiveBar shows={shows} autoDJImage={autoDJImage}/>
 
-        {/* Hint for logged-in hosts */}
         {currentUser&&(
           <div style={{background:"#0a1f10",border:"1px solid #0d3d1a",borderRadius:8,padding:"10px 16px",marginBottom:20,fontSize:13,color:"#44cc88"}}>
             💡 <strong>Tip:</strong> Click any empty slot on the schedule to book your show!
@@ -1139,9 +1107,13 @@ export default function App(){
                 <span style={{display:"flex",alignItems:"center",gap:4}}><span style={{width:10,height:10,borderRadius:2,background:"#0d2035",border:"1px solid #1a3050",display:"inline-block"}}/> Scheduled</span>
               </div>
             </div>
-            <div style={{background:"#060f1e",borderRadius:12,border:"1px solid #1a2a3a",overflow:"hidden",padding:"0 0 16px"}}>
-              <ScheduleGrid shows={shows} days={days} onSlotClick={(day,hour)=>setBookSlot({day,hour})} currentUser={currentUser}/>
-            </div>
+            {showsLoading?(
+              <div style={{textAlign:"center",padding:"60px 0",color:"#4a6a8a",fontSize:14}}>Loading schedule...</div>
+            ):(
+              <div style={{background:"#060f1e",borderRadius:12,border:"1px solid #1a2a3a",overflow:"hidden",padding:"0 0 16px"}}>
+                <ScheduleGrid shows={shows} days={days} onSlotClick={(day,hour)=>setBookSlot({day,hour})} currentUser={currentUser}/>
+              </div>
+            )}
             {!currentUser&&(
               <p style={{textAlign:"center",color:"#4a6a8a",fontSize:13,marginTop:16}}>
                 <button onClick={()=>setShowLogin(true)} style={{background:"none",border:"none",color:"#00e5ff",cursor:"pointer",fontWeight:700,fontSize:13}}>Log in as a host</button> to book shows.
